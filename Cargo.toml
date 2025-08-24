@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-walkdir = "2"
 sha1 = "0.10"
-humantime = "2"
+chrono = { version = "0.4", features = ["clock"] }
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.7", features = ["postgres", "chrono", "runtime-tokio-native-tls"] }
+hostname = "0.3"

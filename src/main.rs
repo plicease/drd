@@ -9,6 +9,10 @@ use std::path::PathBuf;
 
 /*
 
+TODO:
+  * test for upsert (insert)
+  * test for upsert (update)
+
 THEN:
  * recurse
  * better CLI
@@ -144,4 +148,98 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("✅ Inserted into database");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn test_from_path_empty() -> Result<(), Box<dyn std::error::Error>> {
+        let mut file_record = FileRecord::from_path("./corpus/empty.txt")?;
+        assert_eq!(file_record.filename, "empty.txt");
+        assert_eq!(file_record.prefix, [0; 64]);
+        assert_eq!(file_record.prefix_size, 0);
+        assert_eq!(file_record.size, 0);
+        assert_eq!(file_record.sha1, None);
+
+        file_record.read_prefix()?;
+
+        assert_eq!(file_record.prefix, [0; 64]);
+        assert_eq!(file_record.prefix_size, 0);
+
+        file_record.read_sha1()?;
+
+        assert_eq!(
+            file_record.sha1.as_deref().unwrap_or(""),
+            "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_path_short() -> Result<(), Box<dyn std::error::Error>> {
+        let mut file_record = FileRecord::from_path("./corpus/short.txt")?;
+        assert_eq!(file_record.filename, "short.txt");
+        assert_eq!(file_record.prefix, [0; 64]);
+        assert_eq!(file_record.prefix_size, 0);
+        assert_eq!(file_record.size, 13);
+        assert_eq!(file_record.sha1, None);
+
+        file_record.read_prefix()?;
+
+        assert_eq!(
+            file_record.prefix,
+            [
+                72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100, 33, 10, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
+        );
+        assert_eq!(file_record.prefix_size, 13);
+
+        file_record.read_sha1()?;
+
+        assert_eq!(
+            file_record.sha1.as_deref().unwrap_or(""),
+            "a0b65939670bc2c010f4d5d6a0b3e4e4590fb92b"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_path_long() -> Result<(), Box<dyn std::error::Error>> {
+        let mut file_record = FileRecord::from_path("./corpus/long.txt")?;
+        assert_eq!(file_record.filename, "long.txt");
+        assert_eq!(file_record.prefix, [0; 64]);
+        assert_eq!(file_record.prefix_size, 0);
+        assert_eq!(file_record.size, 637);
+        assert_eq!(file_record.sha1, None);
+
+        file_record.read_prefix()?;
+
+        assert_eq!(
+            file_record.prefix,
+            [
+                72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100, 33, 10, 72, 101, 108, 108, 111,
+                32, 87, 111, 114, 108, 100, 33, 10, 72, 101, 108, 108, 111, 32, 87, 111, 114, 108,
+                100, 33, 10, 72, 101, 108, 108, 111, 32, 87, 111, 114, 108, 100, 33, 10, 72, 101,
+                108, 108, 111, 32, 87, 111, 114, 108, 100, 33
+            ]
+        );
+        assert_eq!(file_record.prefix_size, 64);
+
+        file_record.read_sha1()?;
+
+        assert_eq!(
+            file_record.sha1.as_deref().unwrap_or(""),
+            "83e3bf0f7defc7258a85c38a113be383817aff73"
+        );
+
+        Ok(())
+    }
+
 }

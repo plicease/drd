@@ -5,11 +5,9 @@ use std::env;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
+use std::path::PathBuf;
 
 /*
-
-TODO:
- * change number to first7, and make it exectly four bytes
 
 THEN:
  * recurse
@@ -21,7 +19,7 @@ CREATE TABLE file_record (
     hostname TEXT NOT NULL,
     directory TEXT NOT NULL,
     filename TEXT NOT NULL,
-    number BIGINT DEFAULT NULL,
+    prefix BYTEA NOT NULL,
     size BIGINT NOT NULL,
     modified TIMESTAMPTZ NOT NULL,
     sha1 CHAR(40) NOT NULL,
@@ -35,15 +33,16 @@ struct FileRecord {
     directory: String,
     filename: String,
     hostname: String,
-    number: u32, // first 4 bytes of the file
+    prefix: [u8; 64], // first 8 bytes of the file
+    prefix_size: usize,
     size: u64,
     modified: DateTime<Utc>,
     sha1: Option<String>, // optional checksum
 }
 
 impl FileRecord {
-    fn from_path<P: AsRef<Path>>(path: P, with_sha1: bool) -> io::Result<Self> {
-        let path = path.as_ref();
+    fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let path = path.as_ref().canonicalize()?;
 
         let filename = path
             .file_name()
@@ -53,80 +52,61 @@ impl FileRecord {
 
         let directory = path
             .parent()
-            .expect("x")
-            .canonicalize()
-            .expect("y")
+            .ok_or("unable to find directory")?
             .display()
             .to_string();
 
-        let hostname = hostname::get()
-            .expect("unable to find hostname")
-            .to_string_lossy()
-            .into_owned();
+        let hostname = hostname::get()?.to_string_lossy().into_owned();
 
         let metadata = std::fs::metadata(path)?;
-        let size = metadata.len();
-
-        let modified = metadata
-            .modified()
-            .expect("unable to determine modified")
-            .into();
-
-        let mut file = File::open(path)?;
-
-        // --- Read first 4 bytes as u32 ---
-        let mut first4 = [0u8; 4];
-        let mut read_bytes = 0;
-        while read_bytes < 4 {
-            let n = file.read(&mut first4[read_bytes..])?;
-            if n == 0 {
-                break; // file smaller than 4 bytes
-            }
-            read_bytes += n;
-        }
-        let number = if read_bytes == 4 {
-            u32::from_le_bytes(first4) // interpret little endian
-        } else {
-            0 // fallback if file is smaller
-        };
-
-        // --- Optionally compute SHA1 ---
-        let sha1 = if with_sha1 {
-            // Rewind file for hashing
-            let mut file = File::open(path)?;
-            let mut hasher = Sha1::new();
-            let mut buf = [0u8; 8192];
-            loop {
-                let n = file.read(&mut buf)?;
-                if n == 0 {
-                    break;
-                }
-                hasher.update(&buf[..n]);
-            }
-            Some(format!("{:x}", hasher.finalize()))
-        } else {
-            None
-        };
 
         Ok(Self {
-            directory,
-            filename,
-            hostname,
-            number,
-            size,
-            modified,
-            sha1,
+            directory: directory,
+            filename: filename,
+            hostname: hostname,
+            prefix: [0; 64],
+            prefix_size: 0,
+            size: metadata.len(),
+            modified: metadata.modified()?.into(),
+            sha1: None,
         })
+    }
+
+    fn open(&self) -> Result<File, std::io::Error> {
+        let mut path = PathBuf::from(self.directory.clone());
+        path.push(self.filename.clone());
+        File::open(path)
+    }
+
+    fn read_prefix(&mut self) -> Result<(), std::io::Error> {
+        self.prefix_size = self.open()?.read(&mut self.prefix)?;
+        println!("prefix (at read) {:?}", &self.prefix[..self.prefix_size]);
+        Ok(())
+    }
+
+    fn read_sha1(&mut self) -> Result<(), std::io::Error> {
+        let mut hasher = Sha1::new();
+        let mut buf = [0u8; 8192];
+        let mut fp = self.open()?;
+        loop {
+            let n = fp.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
+        }
+        self.sha1 = Some(format!("{:x}", hasher.finalize()));
+        Ok(())
     }
 
     async fn upsert(&self, pool: &PgPool) -> Result<PgQueryResult, sqlx::Error> {
         sqlx::query!(
             r#"
-            INSERT INTO file_record (hostname, directory, filename, number, size, modified, sha1)
+            INSERT INTO file_record (hostname, directory, filename, prefix, size, modified, sha1)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (filename, directory, hostname)
             DO UPDATE SET
-                number = EXCLUDED.number,
+                prefix = EXCLUDED.prefix,
                 size = EXCLUDED.size,
                 modified = EXCLUDED.modified,
                 sha1 = EXCLUDED.sha1
@@ -134,7 +114,7 @@ impl FileRecord {
             self.hostname,
             self.directory,
             self.filename,
-            self.number as i32,
+            &self.prefix[..self.prefix_size],
             self.size as i64,
             self.modified,
             self.sha1,
@@ -155,7 +135,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("please set DATABASE_URL, e.g. postgres://user:pass@localhost/dbname");
     let pool = PgPool::connect(&database_url).await?;
 
-    let record = FileRecord::from_path(path, true)?;
+    let mut record = FileRecord::from_path(path)?;
+    record.read_sha1()?;
+    record.read_prefix()?;
     println!("Inserting record: {:#?}", record);
 
     record.upsert(&pool).await?;

@@ -1,0 +1,9 @@
+[package]
+name = "drd"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+walkdir = "2"
+sha1 = "0.10"
+humantime = "2"

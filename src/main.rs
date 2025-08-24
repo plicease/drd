@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{Read, BufReader};
+use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
@@ -54,9 +54,14 @@ fn process_file(path: &Path) -> std::io::Result<()> {
     }
     let sha1_hex = format!("{:x}", sha1.finalize());
 
+    // separate directory and filename
+    let dir = path.parent().expect("fixme").canonicalize().map(|p| p.display().to_string()).unwrap_or_default();
+    let filename = path.file_name().map(|f| f.to_string_lossy()).unwrap_or_default();
+
     println!(
-        "{} | size={} | first4={} | modified={} | sha1={}",
-        path.display(),
+        "dir={} | filename={} | size={} | first4={} | modified={} | sha1={}",
+        dir,
+        filename,
         file_size,
         first_hex,
         modified_str,

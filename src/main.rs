@@ -5,13 +5,11 @@ use std::env;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
-use std::time::SystemTime;
 
 /*
 
 TODO:
- * change created to updated
- * change number to first4, and make it exectly four bytes
+ * change number to first7, and make it exectly four bytes
 
 THEN:
  * recurse
@@ -25,7 +23,7 @@ CREATE TABLE file_record (
     filename TEXT NOT NULL,
     number BIGINT DEFAULT NULL,
     size BIGINT NOT NULL,
-    created TIMESTAMPTZ NOT NULL,
+    modified TIMESTAMPTZ NOT NULL,
     sha1 CHAR(40) NOT NULL,
     UNIQUE (filename,directory,hostname)
 );
@@ -39,7 +37,7 @@ struct FileRecord {
     hostname: String,
     number: u32, // first 4 bytes of the file
     size: u64,
-    created: DateTime<Utc>,
+    modified: DateTime<Utc>,
     sha1: Option<String>, // optional checksum
 }
 
@@ -69,11 +67,10 @@ impl FileRecord {
         let metadata = std::fs::metadata(path)?;
         let size = metadata.len();
 
-        let created_sys: SystemTime = match metadata.created() {
-            Ok(t) => t,
-            Err(_) => metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
-        };
-        let created: DateTime<Utc> = created_sys.into();
+        let modified = metadata
+            .modified()
+            .expect("unable to determine modified")
+            .into();
 
         let mut file = File::open(path)?;
 
@@ -117,7 +114,7 @@ impl FileRecord {
             hostname,
             number,
             size,
-            created,
+            modified,
             sha1,
         })
     }
@@ -125,13 +122,13 @@ impl FileRecord {
     async fn upsert(&self, pool: &PgPool) -> Result<PgQueryResult, sqlx::Error> {
         sqlx::query!(
             r#"
-            INSERT INTO file_record (hostname, directory, filename, number, size, created, sha1)
+            INSERT INTO file_record (hostname, directory, filename, number, size, modified, sha1)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (filename, directory, hostname)
             DO UPDATE SET
                 number = EXCLUDED.number,
                 size = EXCLUDED.size,
-                created = EXCLUDED.created,
+                modified = EXCLUDED.modified,
                 sha1 = EXCLUDED.sha1
             "#,
             self.hostname,
@@ -139,7 +136,7 @@ impl FileRecord {
             self.filename,
             self.number as i32,
             self.size as i64,
-            self.created,
+            self.modified,
             self.sha1,
         )
         .execute(pool)

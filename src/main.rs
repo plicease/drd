@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use sha1::{Digest, Sha1};
-use sqlx::{PgPool, postgres::PgQueryResult};
+use sqlx::PgPool;
 use std::env;
 use std::fs::File;
 use std::io::{self, Read};
@@ -8,10 +8,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 /*
-
-TODO:
-  * test for upsert (insert)
-  * test for upsert (update)
 
 THEN:
  * recurse
@@ -91,7 +87,6 @@ impl FileRecord {
 
     fn read_prefix(&mut self) -> Result<(), std::io::Error> {
         self.prefix_size = self.open()?.read(&mut self.prefix)?;
-        println!("prefix (at read) {:?}", &self.prefix[..self.prefix_size]);
         Ok(())
     }
 

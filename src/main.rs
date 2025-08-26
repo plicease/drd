@@ -1,7 +1,9 @@
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sha1::{Digest, Sha1};
 use sqlx::PgPool;
 use std::env;
+use std::fs;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
@@ -35,7 +37,7 @@ fn vec_to_trunc_or_pad_64(v: Vec<u8>) -> [u8; 64] {
 }
 
 impl FileRecord {
-    fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error>> {
+    fn from_path<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref().canonicalize()?;
 
         let filename = path
@@ -46,8 +48,8 @@ impl FileRecord {
 
         let directory = path
             .parent()
-            .ok_or("unable to find directory")?
-            .display()
+            .and_then(|p| p.to_str())
+            .unwrap_or("")
             .to_string();
 
         let hostname = hostname::get()?.to_string_lossy().into_owned();
@@ -66,18 +68,18 @@ impl FileRecord {
         })
     }
 
-    fn open(&self) -> Result<File, std::io::Error> {
+    fn open(&self) -> Result<File> {
         let mut path = PathBuf::from(self.directory.clone());
         path.push(self.filename.clone());
-        File::open(path)
+        Ok(File::open(path)?)
     }
 
-    fn read_prefix(&mut self) -> Result<(), std::io::Error> {
+    fn read_prefix(&mut self) -> Result<()> {
         self.prefix_size = self.open()?.read(&mut self.prefix)?;
         Ok(())
     }
 
-    fn read_sha1(&mut self) -> Result<(), std::io::Error> {
+    fn read_sha1(&mut self) -> Result<()> {
         let mut hasher = Sha1::new();
         let mut buf = [0u8; 8192];
         let mut fp = self.open()?;
@@ -92,7 +94,7 @@ impl FileRecord {
         Ok(())
     }
 
-    async fn upsert(&self, pool: &PgPool) -> Result<(), sqlx::Error> {
+    async fn upsert(&self, pool: &PgPool) -> Result<()> {
         sqlx::query!(
             r#"
             INSERT INTO file_record (hostname, directory, filename, prefix, size, modified, sha1)
@@ -122,7 +124,7 @@ impl FileRecord {
         hostname: &str,
         directory: &str,
         filename: &str,
-    ) -> Result<Option<FileRecord>, sqlx::Error> {
+    ) -> Result<Option<FileRecord>> {
         let row = sqlx::query!(
             r#"
             SELECT hostname, directory, filename, prefix, size, modified, sha1
@@ -149,8 +151,48 @@ impl FileRecord {
     }
 }
 
+fn visit_file(path: &Path) {
+    let mut on_disk = FileRecord::from_path(&path).unwrap();
+    println!("file = {:?}", path);
+}
+
+fn visit_dir(path: &Path) {
+    let mut list: Vec<String> = Vec::new();
+    for entry in fs::read_dir(path).unwrap() {
+        let path = entry.unwrap().path();
+        if visit(&path) {
+            list.push(path.file_name().unwrap().to_string_lossy().to_string());
+        }
+    }
+    println!("dir = {:?}", list);
+}
+
+fn visit(path: &Path) -> bool {
+    if let Some(name) = path.file_name() {
+        if name.to_string_lossy().starts_with('.') {
+            return false;
+        }
+    }
+
+    if path.is_symlink() {
+        return false;
+    }
+
+    if path.is_dir() {
+        visit_dir(path);
+        return false;
+    }
+
+    if path.is_file() {
+        visit_file(path);
+        return true;
+    }
+
+    return false;
+}
+
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let path = args
         .next()
@@ -160,13 +202,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("please set DATABASE_URL, e.g. postgres://user:pass@localhost/dbname");
     let pool = PgPool::connect(&database_url).await?;
 
-    let mut record = FileRecord::from_path(path)?;
+    let mut record = FileRecord::from_path(&path)?;
     record.read_sha1()?;
     record.read_prefix()?;
     println!("Inserting record: {:#?}", record);
 
     record.upsert(&pool).await?;
     println!("✅ Inserted into database");
+
+    //visit(&Path::new(&path));
 
     Ok(())
 }
@@ -178,39 +222,37 @@ mod tests {
     use chrono::TimeZone;
 
     #[test]
-    fn test_from_path_empty() -> Result<(), Box<dyn std::error::Error>> {
-        let mut file_record = FileRecord::from_path("./corpus/empty.txt")?;
+    fn test_from_path_empty() {
+        let mut file_record = FileRecord::from_path("./corpus/empty.txt").unwrap();
         assert_eq!(file_record.filename, "empty.txt");
         assert_eq!(file_record.prefix, [0; 64]);
         assert_eq!(file_record.prefix_size, 0);
         assert_eq!(file_record.size, 0);
         assert_eq!(file_record.sha1, None);
 
-        file_record.read_prefix()?;
+        file_record.read_prefix().unwrap();
 
         assert_eq!(file_record.prefix, [0; 64]);
         assert_eq!(file_record.prefix_size, 0);
 
-        file_record.read_sha1()?;
+        file_record.read_sha1().unwrap();
 
         assert_eq!(
             file_record.sha1.as_deref().unwrap_or(""),
             "da39a3ee5e6b4b0d3255bfef95601890afd80709"
         );
-
-        Ok(())
     }
 
     #[test]
-    fn test_from_path_short() -> Result<(), Box<dyn std::error::Error>> {
-        let mut file_record = FileRecord::from_path("./corpus/short.txt")?;
+    fn test_from_path_short() {
+        let mut file_record = FileRecord::from_path("./corpus/short.txt").unwrap();
         assert_eq!(file_record.filename, "short.txt");
         assert_eq!(file_record.prefix, [0; 64]);
         assert_eq!(file_record.prefix_size, 0);
         assert_eq!(file_record.size, 13);
         assert_eq!(file_record.sha1, None);
 
-        file_record.read_prefix()?;
+        file_record.read_prefix().unwrap();
 
         assert_eq!(
             file_record.prefix,
@@ -222,26 +264,24 @@ mod tests {
         );
         assert_eq!(file_record.prefix_size, 13);
 
-        file_record.read_sha1()?;
+        file_record.read_sha1().unwrap();
 
         assert_eq!(
             file_record.sha1.as_deref().unwrap_or(""),
             "a0b65939670bc2c010f4d5d6a0b3e4e4590fb92b"
         );
-
-        Ok(())
     }
 
     #[test]
-    fn test_from_path_long() -> Result<(), Box<dyn std::error::Error>> {
-        let mut file_record = FileRecord::from_path("./corpus/long.txt")?;
+    fn test_from_path_long() {
+        let mut file_record = FileRecord::from_path("./corpus/long.txt").unwrap();
         assert_eq!(file_record.filename, "long.txt");
         assert_eq!(file_record.prefix, [0; 64]);
         assert_eq!(file_record.prefix_size, 0);
         assert_eq!(file_record.size, 637);
         assert_eq!(file_record.sha1, None);
 
-        file_record.read_prefix()?;
+        file_record.read_prefix().unwrap();
 
         assert_eq!(
             file_record.prefix,
@@ -254,14 +294,12 @@ mod tests {
         );
         assert_eq!(file_record.prefix_size, 64);
 
-        file_record.read_sha1()?;
+        file_record.read_sha1().unwrap();
 
         assert_eq!(
             file_record.sha1.as_deref().unwrap_or(""),
             "83e3bf0f7defc7258a85c38a113be383817aff73"
         );
-
-        Ok(())
     }
 
     async fn database_connection() -> PgPool {

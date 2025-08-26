@@ -18,8 +18,9 @@ jobs:
           - stable
 
     env:
-      DATABASE_URL: postgres://runner@localhost/drd
-      TEST_DATABASE_URL: postgres://runner@localhost/test
+      PGUSER: runner
+      DATABASE_URL: postgres:///drd
+      TEST_DATABASE_URL: postgres:///test
 
 
     steps:

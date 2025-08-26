@@ -8,11 +8,11 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 use std::path::PathBuf;
+use async_recursion::async_recursion;
 
 /*
 
 THEN:
- * recurse
  * better CLI
 
 */
@@ -119,6 +119,15 @@ impl FileRecord {
         Ok(())
     }
 
+    async fn is_database_current(&self, pool: &PgPool) -> Result<bool> {
+        if let Some(db_record) = Self::fetch_by_name(pool, &self.hostname, &self.directory, &self.filename).await? {
+            if self.modified.timestamp() == db_record.modified.timestamp() && self.size == db_record.size {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+
     async fn fetch_by_name(
         pool: &PgPool,
         hostname: &str,
@@ -151,66 +160,66 @@ impl FileRecord {
     }
 }
 
-fn visit_file(path: &Path) {
-    let mut on_disk = FileRecord::from_path(&path).unwrap();
-    println!("file = {:?}", path);
+async fn visit_file(path: &Path, pool: &PgPool) -> Result<bool> {
+    let mut on_disk = FileRecord::from_path(&path)?;
+    if !on_disk.is_database_current(&pool).await? {
+        on_disk.read_prefix()?;
+        on_disk.read_sha1()?;
+        on_disk.upsert(pool).await?;
+        println!("updating {:?}", path);
+    } else {
+        println!("skipping {:?}", path);
+    }
+    Ok(true)
 }
 
-fn visit_dir(path: &Path) {
+#[async_recursion]
+async fn visit_dir(path: &Path, pool: &PgPool) -> Result<bool> {
     let mut list: Vec<String> = Vec::new();
     for entry in fs::read_dir(path).unwrap() {
         let path = entry.unwrap().path();
-        if visit(&path) {
+        if visit(&path, pool).await? {
             list.push(path.file_name().unwrap().to_string_lossy().to_string());
         }
     }
-    println!("dir = {:?}", list);
+    return Ok(false);
 }
 
-fn visit(path: &Path) -> bool {
+async fn visit(path: &Path, pool: &PgPool) -> Result<bool> {
     if let Some(name) = path.file_name() {
         if name.to_string_lossy().starts_with('.') {
-            return false;
+            return Ok(false);
         }
     }
 
     if path.is_symlink() {
-        return false;
+        return Ok(false);
     }
 
     if path.is_dir() {
-        visit_dir(path);
-        return false;
+        return visit_dir(path,pool).await;
     }
 
     if path.is_file() {
-        visit_file(path);
-        return true;
+        return visit_file(path,pool).await;
     }
 
-    return false;
+    return Ok(false);
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let mut args = env::args().skip(1);
-    let path = args
-        .next()
-        .expect("please provide a path to a file (e.g., ./some/dir/file.bin)");
 
     let database_url = env::var("DATABASE_URL")
         .expect("please set DATABASE_URL, e.g. postgres://user:pass@localhost/dbname");
     let pool = PgPool::connect(&database_url).await?;
 
-    let mut record = FileRecord::from_path(&path)?;
-    record.read_sha1()?;
-    record.read_prefix()?;
-    println!("Inserting record: {:#?}", record);
+    let mut args = env::args().skip(1);
+    let path = args
+        .next()
+        .unwrap_or("./corpus".to_string());
 
-    record.upsert(&pool).await?;
-    println!("✅ Inserted into database");
-
-    //visit(&Path::new(&path));
+    visit(&Path::new(&path), &pool).await?;
 
     Ok(())
 }

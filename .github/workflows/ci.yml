@@ -26,6 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Database
         run:  |
+          set -ex
           sudo systemctl start postgresql.service
           sudo -u postgres createuser -d -e runner
           echo 'SELECT version();' | psql

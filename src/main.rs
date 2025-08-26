@@ -13,6 +13,7 @@ use async_recursion::async_recursion;
 /*
 
 THEN:
+ * when recusing, delete files that are no longer there
  * better CLI
 
 */

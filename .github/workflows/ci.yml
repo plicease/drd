@@ -27,7 +27,7 @@ jobs:
       - name: Database
         run:  |
           sudo systemctl start postgresql.service
-          sudo createuser -d -e runner
+          sudo -u postgres createuser -d -e runner
           echo 'SELECT version();' | psql
           createdb drd
           psql drd < schema/schema.sql

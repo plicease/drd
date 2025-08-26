@@ -12,13 +12,29 @@ jobs:
     name: Rust project - latest
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         toolchain:
           - stable
-          - beta
-          - nightly
+
+    env:
+      DATABASE_URL: postgres://localhost/drd
+      TEST_DATABASE_URL: postgres://localhost/test
+
+
     steps:
       - uses: actions/checkout@v4
-      - run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }}
-      - run: cargo build --verbose
-      - run: cargo test --verbose
+      - name: Database
+        run:  |
+          sudo systemctl start postgresql.service
+          echo 'SELECT version();' | psql
+          createdb drd
+          psql drd < schema/schema.sql
+          createdb test
+          psql test < schema/schema.sql
+      - name: Update Rust
+        run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }}
+      - name: Build
+        run: cargo build --verbose
+      - name: Test
+        run: cargo test --verbose

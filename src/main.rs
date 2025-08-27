@@ -12,8 +12,11 @@ use std::path::PathBuf;
 
 /*
 
+TODO:
+ * (optionally) store device and inode ids
+ * upsert dignostic should specify either insert or update (is_database_current can return an enum?)
+
 THEN:
- * when recusing, delete files that are no longer there
  * better CLI
 
 */
@@ -191,7 +194,7 @@ async fn visit_file(path: &Path, pool: &PgPool) -> Result<bool> {
         on_disk.read_prefix()?;
         on_disk.read_sha1()?;
         on_disk.upsert(pool).await?;
-        println!("updating {:?}", path);
+        println!("upsert {}", path.canonicalize()?.to_string_lossy().to_string());
     }
     Ok(true)
 }
@@ -221,7 +224,7 @@ async fn visit_dir(path: &Path, pool: &PgPool) -> Result<bool> {
     .await?;
 
     for filename in names {
-        println!("removing {:?}", filename);
+        println!("delete {}/{}", directory, filename);
     }
 
     return Ok(false);
@@ -249,6 +252,46 @@ async fn visit(path: &Path, pool: &PgPool) -> Result<bool> {
     return Ok(false);
 }
 
+async fn visit_all(path: &Path, pool: &PgPool) -> Result<bool> {
+    let ret = visit(path, pool).await;
+
+    let mut like = path.canonicalize()?.to_string_lossy().to_string();
+    like.push_str("/%");
+
+    let directories: Vec<String> = sqlx::query_scalar!(
+        r#"
+        SELECT DISTINCT directory
+        FROM file_record
+        WHERE directory like $1;
+        "#,
+        like,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for directory in directories {
+        let path = Path::new(&directory);
+        if !path.is_dir() {
+            let names: Vec<String> = sqlx::query_scalar!(
+                r#"
+                DELETE FROM file_record
+                WHERE directory = $1
+                RETURNING filename
+                "#,
+                directory,
+            )
+            .fetch_all(pool)
+            .await?;
+
+            for filename in names {
+                println!("delete {}/{}", directory, filename);
+            }
+        }
+    }
+
+    ret
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let database_url = env::var("DATABASE_URL")
@@ -258,7 +301,7 @@ async fn main() -> Result<()> {
     let mut args = env::args().skip(1);
     let path = args.next().unwrap_or("./corpus".to_string());
 
-    visit(&Path::new(&path), &pool).await?;
+    visit_all(&Path::new(&path), &pool).await?;
 
     Ok(())
 }

@@ -209,9 +209,11 @@ async fn visit_dir(path: &Path, pool: &PgPool) -> Result<bool> {
     let directory = path.canonicalize()?.to_string_lossy().to_string();
 
     let names: Vec<String> = sqlx::query_scalar!(
-        r#"DELETE FROM file_record
-                WHERE directory = $1 AND filename <> ALL($2)
-                RETURNING filename"#,
+        r#"
+        DELETE FROM file_record
+        WHERE directory = $1 AND filename <> ALL($2)
+        RETURNING filename
+        "#,
         directory,
         &list,
     )

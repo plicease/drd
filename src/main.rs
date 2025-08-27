@@ -23,7 +23,7 @@ struct FileRecord {
     directory: String,
     filename: String,
     hostname: String,
-    prefix: [u8; 64], // first 8 bytes of the file
+    prefix: [u8; 64],
     prefix_size: usize,
     size: u64,
     modified: DateTime<Utc>,
@@ -121,6 +121,24 @@ impl FileRecord {
     }
 
     async fn is_database_current(&self, pool: &PgPool) -> Result<bool> {
+        let row = sqlx::query!(
+            r#"
+            SELECT size, modified
+            FROM file_record
+            WHERE hostname = $1 AND directory = $2 and filename = $3
+            "#,
+            self.hostname,
+            self.directory,
+            self.filename,
+        )
+        .fetch_optional(pool).await?;
+
+        if let Some(row) = row {
+            if self.size == row.size as u64 && self.modified.timestamp() == row.modified.timestamp() {
+                return Ok(true);
+            }
+        }
+
         if let Some(db_record) = Self::fetch_by_name(pool, &self.hostname, &self.directory, &self.filename).await? {
             if self.modified.timestamp() == db_record.modified.timestamp() && self.size == db_record.size {
                 return Ok(true);
@@ -168,8 +186,6 @@ async fn visit_file(path: &Path, pool: &PgPool) -> Result<bool> {
         on_disk.read_sha1()?;
         on_disk.upsert(pool).await?;
         println!("updating {:?}", path);
-    } else {
-        println!("skipping {:?}", path);
     }
     Ok(true)
 }

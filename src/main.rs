@@ -194,7 +194,10 @@ async fn visit_file(path: &Path, pool: &PgPool) -> Result<bool> {
         on_disk.read_prefix()?;
         on_disk.read_sha1()?;
         on_disk.upsert(pool).await?;
-        println!("upsert {}", path.canonicalize()?.to_string_lossy().to_string());
+        println!(
+            "upsert {}",
+            path.canonicalize()?.to_string_lossy().to_string()
+        );
     }
     Ok(true)
 }

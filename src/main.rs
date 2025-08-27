@@ -1,4 +1,5 @@
 use anyhow::Result;
+use async_recursion::async_recursion;
 use chrono::{DateTime, Utc};
 use sha1::{Digest, Sha1};
 use sqlx::PgPool;
@@ -8,7 +9,6 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 use std::path::PathBuf;
-use async_recursion::async_recursion;
 
 /*
 
@@ -131,16 +131,22 @@ impl FileRecord {
             self.directory,
             self.filename,
         )
-        .fetch_optional(pool).await?;
+        .fetch_optional(pool)
+        .await?;
 
         if let Some(row) = row {
-            if self.size == row.size as u64 && self.modified.timestamp() == row.modified.timestamp() {
+            if self.size == row.size as u64 && self.modified.timestamp() == row.modified.timestamp()
+            {
                 return Ok(true);
             }
         }
 
-        if let Some(db_record) = Self::fetch_by_name(pool, &self.hostname, &self.directory, &self.filename).await? {
-            if self.modified.timestamp() == db_record.modified.timestamp() && self.size == db_record.size {
+        if let Some(db_record) =
+            Self::fetch_by_name(pool, &self.hostname, &self.directory, &self.filename).await?
+        {
+            if self.modified.timestamp() == db_record.modified.timestamp()
+                && self.size == db_record.size
+            {
                 return Ok(true);
             }
         }
@@ -199,6 +205,23 @@ async fn visit_dir(path: &Path, pool: &PgPool) -> Result<bool> {
             list.push(path.file_name().unwrap().to_string_lossy().to_string());
         }
     }
+
+    let directory = path.canonicalize()?.to_string_lossy().to_string();
+
+    let names: Vec<String> = sqlx::query_scalar!(
+        r#"DELETE FROM file_record
+                WHERE directory = $1 AND filename <> ALL($2)
+                RETURNING filename"#,
+        directory,
+        &list,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for filename in names {
+        println!("removing {:?}", filename);
+    }
+
     return Ok(false);
 }
 
@@ -214,11 +237,11 @@ async fn visit(path: &Path, pool: &PgPool) -> Result<bool> {
     }
 
     if path.is_dir() {
-        return visit_dir(path,pool).await;
+        return visit_dir(path, pool).await;
     }
 
     if path.is_file() {
-        return visit_file(path,pool).await;
+        return visit_file(path, pool).await;
     }
 
     return Ok(false);
@@ -226,15 +249,12 @@ async fn visit(path: &Path, pool: &PgPool) -> Result<bool> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-
     let database_url = env::var("DATABASE_URL")
         .expect("please set DATABASE_URL, e.g. postgres://user:pass@localhost/dbname");
     let pool = PgPool::connect(&database_url).await?;
 
     let mut args = env::args().skip(1);
-    let path = args
-        .next()
-        .unwrap_or("./corpus".to_string());
+    let path = args.next().unwrap_or("./corpus".to_string());
 
     visit(&Path::new(&path), &pool).await?;
 

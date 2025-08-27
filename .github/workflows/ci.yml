@@ -42,3 +42,5 @@ jobs:
         run: cargo build --verbose
       - name: Test
         run: cargo test --verbose
+      - name: Tidy
+        run: cargo fmt --check
